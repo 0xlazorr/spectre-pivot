@@ -1,6 +1,16 @@
 import asyncio
 from dataclasses import dataclass
+from enum import Enum
 from typing import Optional
+
+class FingerprintState(str, Enum):
+    """Explicit state machine for service fingerprinting."""
+    INIT = "init"
+    CONNECTING = "connecting"
+    PROBING = "probing"
+    ANALYZING = "analyzing"
+    CLASSIFIED = "classified"
+    FAILED = "failed"
 
 @dataclass
 class ServiceInfo:
@@ -9,6 +19,7 @@ class ServiceInfo:
     service_name: str
     banner: str
     details: dict
+    state: FingerprintState = FingerprintState.INIT
 
 class ServiceFingerprinter:
     @staticmethod
@@ -16,11 +27,14 @@ class ServiceFingerprinter:
         banner = ""
         service = "unknown"
         details = {}
+        state = FingerprintState.CONNECTING
+        writer = None
 
         try:
             reader, writer = await asyncio.wait_for(
                 asyncio.open_connection(host, port), timeout=timeout
             )
+            state = FingerprintState.PROBING
 
             # Common probes by port
             if port in [80, 8080, 8000, 3000]:
@@ -47,10 +61,17 @@ class ServiceFingerprinter:
                 data = await asyncio.wait_for(reader.read(256), timeout=1.0)
                 banner = data.decode(errors="ignore").strip()
 
-            writer.close()
-            await writer.wait_closed()
+            state = FingerprintState.CLASSIFIED
         except Exception as e:
             banner = f"Probe error: {e}"
+            state = FingerprintState.FAILED
+        finally:
+            if writer is not None:
+                try:
+                    writer.close()
+                    await writer.wait_closed()
+                except Exception:
+                    pass
 
         return ServiceInfo(
             host=host,
@@ -58,4 +79,5 @@ class ServiceFingerprinter:
             service_name=service,
             banner=banner[:150],
             details=details,
+            state=state,
         )
